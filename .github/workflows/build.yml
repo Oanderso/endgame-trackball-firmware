@@ -93,13 +93,15 @@ jobs:
         run: |
           set -euo pipefail
 
-          west build \
-            -s zmk/app \
-            -d build/efogtech_trackball_0 \
-            -b efogtech_trackball_0 \
-            -- \
-            -DZMK_CONFIG="${{ github.workspace }}/zmk-workspace/config" \
-            -DZMK_EXTRA_MODULES="${{ github.workspace }}/zmk-workspace/endgame-trackball-config"
+            west build \
+              -s zmk/app \
+              -d build/efogtech_trackball_0 \
+              -b efogtech_trackball_0 \
+              -S studio-rpc-usb-uart \
+              -- \
+              -DZMK_CONFIG="${{ github.workspace }}/zmk-workspace/config" \
+              -DZMK_EXTRA_MODULES="${{ github.workspace }}/zmk-workspace/endgame-trackball-config" \
+              -DCONFIG_ZMK_STUDIO=y
 
       - name: Rename firmware
         run: |

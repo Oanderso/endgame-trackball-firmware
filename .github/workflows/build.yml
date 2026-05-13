@@ -39,13 +39,11 @@ jobs:
 
       - name: Set release name
         id: release_name
-        run: |
-          echo "value=${{ steps.release_version.outputs.value }}" >> "$GITHUB_OUTPUT"
+        run: echo "value=${{ steps.release_version.outputs.value }}" >> "$GITHUB_OUTPUT"
 
       - name: Set archive name
         id: archive_name
-        run: |
-          echo "value=firmware" >> "$GITHUB_OUTPUT"
+        run: echo "value=firmware" >> "$GITHUB_OUTPUT"
 
   build:
     name: Build trackball firmware
@@ -87,37 +85,47 @@ jobs:
           python3 -m pip install --user west
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
-      - name: Create isolated west workspace
+      - name: Create west workspace
         run: |
           set -euo pipefail
 
           mkdir -p zmk-workspace
-          cp -r endgame-trackball-config zmk-workspace/config
+
+          # This becomes the ZMK config directory and west manifest repository.
+          cp -r endgame-trackball-config/config zmk-workspace/config
+
+          # This becomes the local ZMK module containing boards/, zephyr/module.yml, etc.
+          cp -r endgame-trackball-config zmk-workspace/endgame-trackball-config
 
           echo "Workspace layout:"
-          find zmk-workspace -maxdepth 3 -type f -name "west.yml" -print
-          find zmk-workspace -maxdepth 3 -type f -name "build.yaml" -print
+          find zmk-workspace -maxdepth 4 -type f \( -name "west.yml" -o -name "module.yml" -o -name "build.yaml" \) -print
 
       - name: Initialize west workspace
         working-directory: zmk-workspace
         run: |
           set -euo pipefail
-          west init -l config/config
+          west init -l config
 
       - name: Update west workspace
-        working-directory: zmk-workspace/config
+        working-directory: zmk-workspace
         run: |
           set -euo pipefail
           west update --fetch-opt=--filter=tree:0
 
+      - name: Export Zephyr CMake package
+        working-directory: zmk-workspace
+        run: |
+          set -euo pipefail
+          west zephyr-export
+
       - name: Install Zephyr Python requirements
-        working-directory: zmk-workspace/config
+        working-directory: zmk-workspace
         run: |
           set -euo pipefail
           python3 -m pip install --user -r zephyr/scripts/requirements.txt
 
       - name: Build firmware
-        working-directory: zmk-workspace/config
+        working-directory: zmk-workspace
         run: |
           set -euo pipefail
 
@@ -126,8 +134,8 @@ jobs:
             -d build/efogtech_trackball_0 \
             -b efogtech_trackball_0 \
             -- \
-            -DZMK_CONFIG="${{ github.workspace }}/zmk-workspace/config/config" \
-            -DZMK_EXTRA_MODULES="${{ github.workspace }}/zmk-workspace/config" \
+            -DZMK_CONFIG="${{ github.workspace }}/zmk-workspace/config" \
+            -DZMK_EXTRA_MODULES="${{ github.workspace }}/zmk-workspace/endgame-trackball-config" \
             -DCONFIG_ZMK_STUDIO=y \
             -DSHIELD="studio-rpc-usb-uart zmk-usb-logging"
 
@@ -136,7 +144,7 @@ jobs:
           set -euo pipefail
 
           mkdir -p firmware
-          cp zmk-workspace/config/build/efogtech_trackball_0/zephyr/*.uf2 "firmware/${{ needs.meta.outputs.release_version }}.uf2"
+          cp zmk-workspace/build/efogtech_trackball_0/zephyr/*.uf2 "firmware/${{ needs.meta.outputs.release_version }}.uf2"
 
           echo "Firmware output:"
           ls -la firmware

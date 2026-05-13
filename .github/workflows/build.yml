@@ -15,6 +15,7 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
       - name: Check if paw3395 branch
         id: check_branch
         run: |
@@ -23,6 +24,7 @@ jobs:
           else
             echo "is_paw3395=false" >> "$GITHUB_OUTPUT"
           fi
+
       - name: Read release version
         id: release_version
         run: |
@@ -39,28 +41,32 @@ jobs:
           echo "major=${major}" >> "$GITHUB_OUTPUT"
           echo "minor=${minor}" >> "$GITHUB_OUTPUT"
           echo "patch=${patch}" >> "$GITHUB_OUTPUT"
+
       - name: Set paw3395 version
         id: paw3395_version
         run: |
           major=${{ steps.release_version.outputs.major }}
           paw3395_major=$((major - 100))
           echo "value=endgame-paw3395-${paw3395_major}.${{ steps.release_version.outputs.minor }}.${{ steps.release_version.outputs.patch }}" >> "$GITHUB_OUTPUT"
-      - name: Set paw3395 lookup version (major - 100)
+
+      - name: Set paw3395 lookup version
         id: paw3395_lookup_version
         run: |
           major=${{ steps.release_version.outputs.major }}
           lookup_major=$((major - 100))
           echo "value=endgame-${lookup_major}.${{ steps.release_version.outputs.minor }}.${{ steps.release_version.outputs.patch }}" >> "$GITHUB_OUTPUT"
+
       - name: Set release name
         id: release_name
         run: echo "value=${{ steps.release_version.outputs.value }}" >> "$GITHUB_OUTPUT"
+
       - name: Set archive name
         id: archive_name
         run: echo "value=firmware" >> "$GITHUB_OUTPUT"
 
   build:
     needs: meta
-    uses: zmkfirmware/zmk/.github/workflows/build-user-config.yml@v0.3.0
+    uses: zmkfirmware/zmk/.github/workflows/build-user-config.yml@main
     with:
       build_matrix_path: endgame-trackball-config/build.yaml
       config_path: endgame-trackball-config/config
@@ -79,12 +85,14 @@ jobs:
         with:
           path: .
           merge-multiple: true
+
       - name: Rename firmware
         run: |
           for file in *.uf2; do
             mv "$file" "${{ needs.meta.outputs.release_version }}.uf2"
             break
           done
+
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
@@ -108,13 +116,14 @@ jobs:
         with:
           path: .
           merge-multiple: true
+
       - name: Rename firmware for paw3395
         run: |
-          # Find and rename the uf2 file
           for file in *.uf2; do
             mv "$file" "${{ needs.meta.outputs.paw3395_version }}.uf2"
             break
           done
+
       - name: Upload paw3395 firmware to existing release
         uses: softprops/action-gh-release@v2
         with:

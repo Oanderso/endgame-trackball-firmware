@@ -1,10 +1,47 @@
 name: Build ZMK firmware
+
 on: [push, pull_request, workflow_dispatch]
 
 jobs:
+  meta:
+    name: Prepare release metadata
+    runs-on: ubuntu-latest
+    outputs:
+      release_version: ${{ steps.release_version.outputs.value }}
+      archive_name: ${{ steps.archive_name.outputs.value }}
+      release_name: ${{ steps.release_name.outputs.value }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Read release version
+        id: release_version
+        run: |
+          set -euo pipefail
+          defconfig="endgame-trackball-config/boards/arm/efogtech_trackball_0/efogtech_trackball_0_defconfig"
+          major=$(grep -E '^CONFIG_BOARD_EFOGTECH_0_VER_MAJOR=' "$defconfig" | cut -d= -f2)
+          minor=$(grep -E '^CONFIG_BOARD_EFOGTECH_0_VER_MINOR=' "$defconfig" | cut -d= -f2)
+          patch=$(grep -E '^CONFIG_BOARD_EFOGTECH_0_VER_PATCH=' "$defconfig" | cut -d= -f2)
+
+          if [ -z "$major" ] || [ -z "$minor" ] || [ -z "$patch" ]; then
+            echo "Version not found in $defconfig" >&2
+            exit 1
+          fi
+
+          echo "value=endgame-${major}.${minor}.${patch}" >> "$GITHUB_OUTPUT"
+
+      - name: Set release name
+        id: release_name
+        run: echo "value=${{ steps.release_version.outputs.value }}" >> "$GITHUB_OUTPUT"
+
+      - name: Set archive name
+        id: archive_name
+        run: echo "value=firmware" >> "$GITHUB_OUTPUT"
+
   build:
     name: Build trackball firmware
     runs-on: ubuntu-latest
+    needs: meta
 
     steps:
       - name: Checkout repository
@@ -23,26 +60,61 @@ jobs:
           python3 -m pip install --user west
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
+      - name: Create west workspace
+        run: |
+          mkdir zmk-workspace
+          cp -r endgame-trackball-config zmk-workspace/config
+
       - name: Initialize west workspace
-        working-directory: endgame-trackball-config
+        working-directory: zmk-workspace
         run: |
           west init -l config
           west update --fetch-opt=--filter=tree:0
 
       - name: Install Zephyr Python requirements
-        working-directory: endgame-trackball-config
+        working-directory: zmk-workspace
         run: |
           python3 -m pip install --user -r zephyr/scripts/requirements.txt
 
       - name: Build firmware
-        working-directory: endgame-trackball-config
+        working-directory: zmk-workspace
         run: |
           west build -s zmk/app -d build/efogtech_trackball_0 -b efogtech_trackball_0 -- \
-            -DZMK_CONFIG="${{ github.workspace }}/endgame-trackball-config/config" \
-            -DZMK_EXTRA_MODULES="${{ github.workspace }}/endgame-trackball-config"
+            -DZMK_CONFIG="${{ github.workspace }}/zmk-workspace/config/config" \
+            -DZMK_EXTRA_MODULES="${{ github.workspace }}/zmk-workspace/config" \
+            -DCONFIG_ZMK_STUDIO=y \
+            -DSHIELD="studio-rpc-usb-uart zmk-usb-logging"
+
+      - name: Rename firmware
+        run: |
+          mkdir -p firmware
+          cp zmk-workspace/build/efogtech_trackball_0/zephyr/*.uf2 "firmware/${{ needs.meta.outputs.release_version }}.uf2"
 
       - name: Upload firmware artifact
         uses: actions/upload-artifact@v4
         with:
-          name: firmware
-          path: endgame-trackball-config/build/efogtech_trackball_0/zephyr/*.uf2
+          name: ${{ needs.meta.outputs.archive_name }}
+          path: firmware/*.uf2
+
+  release:
+    name: Create release
+    runs-on: ubuntu-latest
+    needs: [meta, build]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: write
+    steps:
+      - name: Download firmware artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.meta.outputs.archive_name }}
+          path: firmware
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.meta.outputs.release_version }}
+          name: ${{ needs.meta.outputs.release_name }}
+          files: firmware/*.uf2
+          draft: false
+          prerelease: false

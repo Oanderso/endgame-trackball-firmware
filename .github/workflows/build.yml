@@ -68,7 +68,7 @@ jobs:
       - name: Initialize west workspace
         working-directory: zmk-workspace
         run: |
-          west init -l config
+          west init -l config/config
           west update --fetch-opt=--filter=tree:0
 
       - name: Install Zephyr Python requirements

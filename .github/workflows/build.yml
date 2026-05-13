@@ -51,7 +51,7 @@ jobs:
 
           mkdir -p zmk-workspace
 
-          # west manifest/config repo
+          # west manifest/config repository
           cp -r endgame-trackball-config/config zmk-workspace/config
 
           # local zephyr module containing boards/
@@ -71,13 +71,30 @@ jobs:
         run: |
           set -euo pipefail
 
+          echo "West topdir:"
           west topdir
 
-          test -f zephyr/share/zephyr-package/cmake/ZephyrConfig.cmake
-          test -f zmk/app/CMakeLists.txt
-          test -f config/west.yml
-          test -f endgame-trackball-config/zephyr/module.yml
-          test -f endgame-trackball-config/boards/arm/efogtech_trackball_0/efogtech_trackball_0_defconfig
+          echo ""
+          echo "Workspace contents:"
+          ls -la
+
+          echo ""
+          echo "Checking important paths:"
+
+          for path in \
+            "zmk/app/CMakeLists.txt" \
+            "zephyr" \
+            "config/west.yml" \
+            "endgame-trackball-config/zephyr/module.yml" \
+            "endgame-trackball-config/boards/arm/efogtech_trackball_0/efogtech_trackball_0_defconfig"
+          do
+            if [ -e "$path" ]; then
+              echo "FOUND: $path"
+            else
+              echo "MISSING: $path"
+              exit 1
+            fi
+          done
 
       - name: Install Zephyr Python requirements
         working-directory: zmk-workspace

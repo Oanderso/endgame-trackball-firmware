@@ -1,125 +1,4 @@
 name: Build ZMK firmware
-on: [push, pull_request, workflow_dispatch]
-
-jobs:
-  meta:
-    name: Prepare release metadata
-    runs-on: ubuntu-latest
-    outputs:
-      release_version: ${{ steps.release_version.outputs.value }}
-      archive_name: ${{ steps.archive_name.outputs.value }}
-      release_name: ${{ steps.release_name.outputs.value }}
-      paw3395_version: ${{ steps.paw3395_version.outputs.value }}
-      paw3395_lookup_version: ${{ steps.paw3395_lookup_version.outputs.value }}
-      is_paw3395_branch: ${{ steps.check_branch.outputs.is_paw3395 }}
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-      - name: Check if paw3395 branch
-        id: check_branch
-        run: |
-          if [ "${{ github.ref }}" = "refs/heads/paw3395" ]; then
-            echo "is_paw3395=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "is_paw3395=false" >> "$GITHUB_OUTPUT"
-          fi
-      - name: Read release version
-        id: release_version
-        run: |
-          set -euo pipefail
-          defconfig="boards/arm/efogtech_trackball_0/efogtech_trackball_0_defconfig"
-          major=$(grep -E '^CONFIG_BOARD_EFOGTECH_0_VER_MAJOR=' "$defconfig" | cut -d= -f2)
-          minor=$(grep -E '^CONFIG_BOARD_EFOGTECH_0_VER_MINOR=' "$defconfig" | cut -d= -f2)
-          patch=$(grep -E '^CONFIG_BOARD_EFOGTECH_0_VER_PATCH=' "$defconfig" | cut -d= -f2)
-          if [ -z "$major" ] || [ -z "$minor" ] || [ -z "$patch" ]; then
-            echo "Version not found in $defconfig" >&2
-            exit 1
-          fi
-          echo "value=endgame-${major}.${minor}.${patch}" >> "$GITHUB_OUTPUT"
-          echo "major=${major}" >> "$GITHUB_OUTPUT"
-          echo "minor=${minor}" >> "$GITHUB_OUTPUT"
-          echo "patch=${patch}" >> "$GITHUB_OUTPUT"
-      - name: Set paw3395 version
-        id: paw3395_version
-        run: |
-          major=${{ steps.release_version.outputs.major }}
-          paw3395_major=$((major - 100))
-          echo "value=endgame-paw3395-${paw3395_major}.${{ steps.release_version.outputs.minor }}.${{ steps.release_version.outputs.patch }}" >> "$GITHUB_OUTPUT"
-      - name: Set paw3395 lookup version (major - 100)
-        id: paw3395_lookup_version
-        run: |
-          major=${{ steps.release_version.outputs.major }}
-          lookup_major=$((major - 100))
-          echo "value=endgame-${lookup_major}.${{ steps.release_version.outputs.minor }}.${{ steps.release_version.outputs.patch }}" >> "$GITHUB_OUTPUT"
-      - name: Set release name
-        id: release_name
-        run: echo "value=${{ steps.release_version.outputs.value }}" >> "$GITHUB_OUTPUT"
-      - name: Set archive name
-        id: archive_name
-        run: echo "value=firmware" >> "$GITHUB_OUTPUT"
-
-  build:
-    needs: meta
-    uses: zmkfirmware/zmk/.github/workflows/build-user-config.yml@v0.3.0
-    with:
-      archive_name: ${{ needs.meta.outputs.archive_name }}
-
-  release:
-    name: Create release
-    runs-on: ubuntu-latest
-    needs: [meta, build]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    permissions:
-      contents: write
-    steps:
-      - name: Download firmware artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: .
-          merge-multiple: true
-      - name: Rename firmware
-        run: |
-          for file in *.uf2; do
-            mv "$file" "${{ needs.meta.outputs.release_version }}.uf2"
-            break
-          done
-      - name: Publish release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ needs.meta.outputs.release_version }}
-          name: "${{ needs.meta.outputs.release_name }}"
-          files: |
-            ./*.uf2
-          draft: false
-          prerelease: false
-
-  paw3395-release:
-    name: Add paw3395 firmware to existing release
-    runs-on: ubuntu-latest
-    needs: [meta, build]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/paw3395'
-    permissions:
-      contents: write
-    steps:
-      - name: Download firmware artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: .
-          merge-multiple: true
-      - name: Rename firmware for paw3395
-        run: |
-          # Find and rename the uf2 file
-          for file in *.uf2; do
-            mv "$file" "${{ needs.meta.outputs.paw3395_version }}.uf2"
-            break
-          done
-      - name: Upload paw3395 firmware to existing release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ needs.meta.outputs.paw3395_lookup_version }}
-          files: |
-            ./*.uf2
-name: Build ZMK firmware
 
 on:
   push:
@@ -139,9 +18,27 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            git cmake ninja-build gperf ccache dfu-util device-tree-compiler wget \
-            python3-dev python3-pip python3-setuptools python3-tk python3-wheel xz-utils file \
-            make gcc gcc-multilib g++-multilib libsdl2-dev libmagic1
+            git \
+            cmake \
+            ninja-build \
+            gperf \
+            ccache \
+            dfu-util \
+            device-tree-compiler \
+            wget \
+            python3-dev \
+            python3-pip \
+            python3-setuptools \
+            python3-tk \
+            python3-wheel \
+            xz-utils \
+            file \
+            make \
+            gcc \
+            gcc-multilib \
+            g++-multilib \
+            libsdl2-dev \
+            libmagic1
 
       - name: Install west
         run: |
@@ -151,34 +48,30 @@ jobs:
       - name: Create west workspace
         run: |
           set -euo pipefail
+
           mkdir -p zmk-workspace
 
-          # ZMK config folder containing west.yml, .conf, and .keymap
+          # west manifest/config repo
           cp -r endgame-trackball-config/config zmk-workspace/config
 
-          # Local module containing boards/, zephyr/module.yml, etc.
+          # local zephyr module containing boards/
           cp -r endgame-trackball-config zmk-workspace/endgame-trackball-config
 
       - name: Initialize west workspace
         working-directory: zmk-workspace
         run: |
           set -euo pipefail
+
           west init -l config
           west update --fetch-opt=--filter=tree:0
           west zephyr-export
 
-      - name: Verify workspace paths
+      - name: Verify workspace
         working-directory: zmk-workspace
         run: |
           set -euo pipefail
-          echo "West topdir:"
+
           west topdir
-
-          echo "ZMK path:"
-          west list zmk -f "{abspath}"
-
-          echo "Zephyr path:"
-          west list zephyr -f "{abspath}"
 
           test -f zephyr/share/zephyr-package/cmake/ZephyrConfig.cmake
           test -f zmk/app/CMakeLists.txt
@@ -186,34 +79,41 @@ jobs:
           test -f endgame-trackball-config/zephyr/module.yml
           test -f endgame-trackball-config/boards/arm/efogtech_trackball_0/efogtech_trackball_0_defconfig
 
-      - name: Set Zephyr environment
-        working-directory: zmk-workspace
-        run: |
-          echo "ZEPHYR_BASE=${{ github.workspace }}/zmk-workspace/zephyr" >> "$GITHUB_ENV"
-          echo "CMAKE_PREFIX_PATH=${{ github.workspace }}/zmk-workspace/zephyr/share/zephyr-package/cmake" >> "$GITHUB_ENV"
-
       - name: Install Zephyr Python requirements
         working-directory: zmk-workspace
         run: |
+          set -euo pipefail
+
           python3 -m pip install --user -r zephyr/scripts/requirements.txt
 
       - name: Build firmware
         working-directory: zmk-workspace
+        env:
+          ZEPHYR_BASE: ${{ github.workspace }}/zmk-workspace/zephyr
         run: |
+          set -euo pipefail
+
           west build \
             -s zmk/app \
             -d build/efogtech_trackball_0 \
             -b efogtech_trackball_0 \
             -- \
             -DZMK_CONFIG="${{ github.workspace }}/zmk-workspace/config" \
-            -DZMK_EXTRA_MODULES="${{ github.workspace }}/zmk-workspace/endgame-trackball-config" \
-            -DZephyr_DIR="${{ github.workspace }}/zmk-workspace/zephyr/share/zephyr-package/cmake" \
-            -DCONFIG_ZMK_STUDIO=y \
-            -DSHIELD="studio-rpc-usb-uart zmk-usb-logging"
+            -DZMK_EXTRA_MODULES="${{ github.workspace }}/zmk-workspace/endgame-trackball-config"
+
+      - name: Rename firmware
+        run: |
+          set -euo pipefail
+
+          mkdir -p firmware
+
+          cp \
+            zmk-workspace/build/efogtech_trackball_0/zephyr/*.uf2 \
+            firmware/endgame-trackball.uf2
 
       - name: Upload firmware artifact
         uses: actions/upload-artifact@v4
         with:
           name: firmware
-          path: zmk-workspace/build/efogtech_trackball_0/zephyr/*.uf2
+          path: firmware/*.uf2
           if-no-files-found: error

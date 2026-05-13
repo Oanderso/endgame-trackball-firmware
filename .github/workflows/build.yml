@@ -2,131 +2,47 @@ name: Build ZMK firmware
 on: [push, pull_request, workflow_dispatch]
 
 jobs:
-  meta:
-    name: Prepare release metadata
+  build:
+    name: Build trackball firmware
     runs-on: ubuntu-latest
-    outputs:
-      release_version: ${{ steps.release_version.outputs.value }}
-      archive_name: ${{ steps.archive_name.outputs.value }}
-      release_name: ${{ steps.release_name.outputs.value }}
-      paw3395_version: ${{ steps.paw3395_version.outputs.value }}
-      paw3395_lookup_version: ${{ steps.paw3395_lookup_version.outputs.value }}
-      is_paw3395_branch: ${{ steps.check_branch.outputs.is_paw3395 }}
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Check if paw3395 branch
-        id: check_branch
+      - name: Install system dependencies
         run: |
-          if [ "${{ github.ref }}" = "refs/heads/paw3395" ]; then
-            echo "is_paw3395=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "is_paw3395=false" >> "$GITHUB_OUTPUT"
-          fi
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            git cmake ninja-build gperf ccache dfu-util device-tree-compiler wget \
+            python3-dev python3-pip python3-setuptools python3-tk python3-wheel xz-utils file \
+            make gcc gcc-multilib g++-multilib libsdl2-dev libmagic1
 
-      - name: Read release version
-        id: release_version
+      - name: Install west
         run: |
-          set -euo pipefail
-          defconfig="endgame-trackball-config/boards/arm/efogtech_trackball_0/efogtech_trackball_0_defconfig"
-          major=$(grep -E '^CONFIG_BOARD_EFOGTECH_0_VER_MAJOR=' "$defconfig" | cut -d= -f2)
-          minor=$(grep -E '^CONFIG_BOARD_EFOGTECH_0_VER_MINOR=' "$defconfig" | cut -d= -f2)
-          patch=$(grep -E '^CONFIG_BOARD_EFOGTECH_0_VER_PATCH=' "$defconfig" | cut -d= -f2)
-          if [ -z "$major" ] || [ -z "$minor" ] || [ -z "$patch" ]; then
-            echo "Version not found in $defconfig" >&2
-            exit 1
-          fi
-          echo "value=endgame-${major}.${minor}.${patch}" >> "$GITHUB_OUTPUT"
-          echo "major=${major}" >> "$GITHUB_OUTPUT"
-          echo "minor=${minor}" >> "$GITHUB_OUTPUT"
-          echo "patch=${patch}" >> "$GITHUB_OUTPUT"
+          python3 -m pip install --user west
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
-      - name: Set paw3395 version
-        id: paw3395_version
+      - name: Initialize west workspace
+        working-directory: endgame-trackball-config
         run: |
-          major=${{ steps.release_version.outputs.major }}
-          paw3395_major=$((major - 100))
-          echo "value=endgame-paw3395-${paw3395_major}.${{ steps.release_version.outputs.minor }}.${{ steps.release_version.outputs.patch }}" >> "$GITHUB_OUTPUT"
+          west init -l config
+          west update --fetch-opt=--filter=tree:0
 
-      - name: Set paw3395 lookup version
-        id: paw3395_lookup_version
+      - name: Install Zephyr Python requirements
+        working-directory: endgame-trackball-config
         run: |
-          major=${{ steps.release_version.outputs.major }}
-          lookup_major=$((major - 100))
-          echo "value=endgame-${lookup_major}.${{ steps.release_version.outputs.minor }}.${{ steps.release_version.outputs.patch }}" >> "$GITHUB_OUTPUT"
+          python3 -m pip install --user -r zephyr/scripts/requirements.txt
 
-      - name: Set release name
-        id: release_name
-        run: echo "value=${{ steps.release_version.outputs.value }}" >> "$GITHUB_OUTPUT"
+      - name: Build firmware
+        working-directory: endgame-trackball-config
+        run: |
+          west build -s zmk/app -d build/efogtech_trackball_0 -b efogtech_trackball_0 -- \
+            -DZMK_CONFIG="${{ github.workspace }}/endgame-trackball-config/config" \
+            -DZMK_EXTRA_MODULES="${{ github.workspace }}/endgame-trackball-config"
 
-      - name: Set archive name
-        id: archive_name
-        run: echo "value=firmware" >> "$GITHUB_OUTPUT"
-
-  build:
-    needs: meta
-    uses: zmkfirmware/zmk/.github/workflows/build-user-config.yml@main
-    with:
-      build_matrix_path: endgame-trackball-config/build.yaml
-      config_path: endgame-trackball-config/config
-      archive_name: ${{ needs.meta.outputs.archive_name }}
-
-  release:
-    name: Create release
-    runs-on: ubuntu-latest
-    needs: [meta, build]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    permissions:
-      contents: write
-    steps:
-      - name: Download firmware artifacts
-        uses: actions/download-artifact@v4
+      - name: Upload firmware artifact
+        uses: actions/upload-artifact@v4
         with:
-          path: .
-          merge-multiple: true
-
-      - name: Rename firmware
-        run: |
-          for file in *.uf2; do
-            mv "$file" "${{ needs.meta.outputs.release_version }}.uf2"
-            break
-          done
-
-      - name: Publish release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ needs.meta.outputs.release_version }}
-          name: "${{ needs.meta.outputs.release_name }}"
-          files: |
-            ./*.uf2
-          draft: false
-          prerelease: false
-
-  paw3395-release:
-    name: Add paw3395 firmware to existing release
-    runs-on: ubuntu-latest
-    needs: [meta, build]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/paw3395'
-    permissions:
-      contents: write
-    steps:
-      - name: Download firmware artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: .
-          merge-multiple: true
-
-      - name: Rename firmware for paw3395
-        run: |
-          for file in *.uf2; do
-            mv "$file" "${{ needs.meta.outputs.paw3395_version }}.uf2"
-            break
-          done
-
-      - name: Upload paw3395 firmware to existing release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ needs.meta.outputs.paw3395_lookup_version }}
-          files: |
-            ./*.uf2
+          name: firmware
+          path: endgame-trackball-config/build/efogtech_trackball_0/zephyr/*.uf2

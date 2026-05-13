@@ -135,9 +135,6 @@ static int flush_restore_buffer(const struct shell *sh) {
     const uint32_t write_addr = restore_state->start_addr + restore_state->current_offset;
     const uint32_t write_len = restore_state->buffer_len;
 
-    /* Lock the scheduler for the entire erase+write sequence so no other
-     * thread can preempt between the two operations and leave flash in an
-     * inconsistent state. */
     k_sched_lock();
 
     struct flash_pages_info info;
@@ -217,9 +214,6 @@ static int cmd_restore(const struct shell *sh, const size_t argc, char **argv) {
         restore_state->current_offset = 0;
         restore_state->buffer_len = 0;
         restore_state->in_progress = true;
-
-        /* Elevate to the highest cooperative priority for the entire restore
-         * session so no preemptive thread can starve the restore process. */
         restore_state->saved_prio = k_thread_priority_get(k_current_get());
         k_thread_priority_set(k_current_get(), K_HIGHEST_THREAD_PRIO);
 
@@ -361,39 +355,17 @@ static int cmd_check_rgb(const struct shell *sh, const size_t argc, char **argv)
     return 0;
 }
 
-/**
- * Dumps NVS storage partition contents in HEX format with checksums.
- *
- * Each 32-byte chunk is followed by a CRC-8 checksum, allowing verification
- * that the data wasn't corrupted by log output or transfer issues.
- *
- * Output format:
- *   BACKUP START ADDR SIZE
- *   OFFSET:HEXBYTES#CHECKSUM
- *   OFFSET:HEXBYTES#CHECKSUM
- *   ...
- *   BACKUP END
- *
- * Example:
- *   BACKUP START 0006c000 00008000
- *   00000000:FF00AABBCC11223344556677889900AABB...#3F
- *   00000020:11223344556677889900AABBCC11223344...#7A
- *   ...
- *   BACKUP END
- */
 static int cmd_backup(const struct shell *sh, const size_t argc, char **argv) {
     const enum zmk_studio_core_lock_state lock_state = zmk_studio_core_get_lock_state();
     if (lock_state == ZMK_STUDIO_CORE_LOCK_STATE_LOCKED) {
         shprint(sh, "Unlock ZMK Studio to allow backup.");
         return -EPERM;
     }
-    
+
     const uint32_t storage_addr = 0x0006c000;
     const uint32_t storage_size = 0x00008000;
 #ifdef CONFIG_LOG_DOMAIN_ID
     const uint32_t saved_level = log_filter_set(NULL, CONFIG_LOG_DOMAIN_ID, 0, LOG_LEVEL_NONE);
-#else
-    const uint32_t saved_level = -1;
 #endif
 
     shprint(sh, "");
@@ -479,10 +451,12 @@ static void rgb_hw_check_work_handler(struct k_work *work) {
         gpio_pin_configure(p0, 15, GPIO_DISCONNECTED);
     }
 
+#ifdef CONFIG_LOG_DOMAIN_ID
     if (settings_log_source_id >= 0) {
         log_filter_set(NULL, CONFIG_LOG_DOMAIN_ID, settings_log_source_id, settings_log_saved_level);
         settings_log_source_id = -1;
     }
+#endif
 }
 
 static K_WORK_DELAYABLE_DEFINE(rgb_hw_check_work, rgb_hw_check_work_handler);

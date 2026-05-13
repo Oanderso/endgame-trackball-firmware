@@ -1,15 +1,20 @@
 name: Build ZMK firmware
 
-on: [push, pull_request, workflow_dispatch]
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
 
 jobs:
   meta:
     name: Prepare release metadata
     runs-on: ubuntu-latest
+
     outputs:
       release_version: ${{ steps.release_version.outputs.value }}
       archive_name: ${{ steps.archive_name.outputs.value }}
       release_name: ${{ steps.release_name.outputs.value }}
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -18,13 +23,15 @@ jobs:
         id: release_version
         run: |
           set -euo pipefail
-          defconfig="endgame-trackball-config/boards/arm/efogtech_trackball_0/efogtech_trackball_0_defconfig"
-          major=$(grep -E '^CONFIG_BOARD_EFOGTECH_0_VER_MAJOR=' "$defconfig" | cut -d= -f2)
-          minor=$(grep -E '^CONFIG_BOARD_EFOGTECH_0_VER_MINOR=' "$defconfig" | cut -d= -f2)
-          patch=$(grep -E '^CONFIG_BOARD_EFOGTECH_0_VER_PATCH=' "$defconfig" | cut -d= -f2)
+
+          DEFCONFIG="endgame-trackball-config/boards/arm/efogtech_trackball_0/efogtech_trackball_0_defconfig"
+
+          major=$(grep -E '^CONFIG_BOARD_EFOGTECH_0_VER_MAJOR=' "$DEFCONFIG" | cut -d= -f2)
+          minor=$(grep -E '^CONFIG_BOARD_EFOGTECH_0_VER_MINOR=' "$DEFCONFIG" | cut -d= -f2)
+          patch=$(grep -E '^CONFIG_BOARD_EFOGTECH_0_VER_PATCH=' "$DEFCONFIG" | cut -d= -f2)
 
           if [ -z "$major" ] || [ -z "$minor" ] || [ -z "$patch" ]; then
-            echo "Version not found in $defconfig" >&2
+            echo "Version not found in $DEFCONFIG" >&2
             exit 1
           fi
 
@@ -32,11 +39,13 @@ jobs:
 
       - name: Set release name
         id: release_name
-        run: echo "value=${{ steps.release_version.outputs.value }}" >> "$GITHUB_OUTPUT"
+        run: |
+          echo "value=${{ steps.release_version.outputs.value }}" >> "$GITHUB_OUTPUT"
 
       - name: Set archive name
         id: archive_name
-        run: echo "value=firmware" >> "$GITHUB_OUTPUT"
+        run: |
+          echo "value=firmware" >> "$GITHUB_OUTPUT"
 
   build:
     name: Build trackball firmware
@@ -51,58 +60,104 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            git cmake ninja-build gperf ccache dfu-util device-tree-compiler wget \
-            python3-dev python3-pip python3-setuptools python3-tk python3-wheel xz-utils file \
-            make gcc gcc-multilib g++-multilib libsdl2-dev libmagic1
+            git \
+            cmake \
+            ninja-build \
+            gperf \
+            ccache \
+            dfu-util \
+            device-tree-compiler \
+            wget \
+            python3-dev \
+            python3-pip \
+            python3-setuptools \
+            python3-tk \
+            python3-wheel \
+            xz-utils \
+            file \
+            make \
+            gcc \
+            gcc-multilib \
+            g++-multilib \
+            libsdl2-dev \
+            libmagic1
 
       - name: Install west
         run: |
           python3 -m pip install --user west
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
-      - name: Create west workspace
+      - name: Create isolated west workspace
         run: |
-          mkdir zmk-workspace
+          set -euo pipefail
+
+          mkdir -p zmk-workspace
           cp -r endgame-trackball-config zmk-workspace/config
+
+          echo "Workspace layout:"
+          find zmk-workspace -maxdepth 3 -type f -name "west.yml" -print
+          find zmk-workspace -maxdepth 3 -type f -name "build.yaml" -print
 
       - name: Initialize west workspace
         working-directory: zmk-workspace
         run: |
+          set -euo pipefail
           west init -l config/config
+
+      - name: Update west workspace
+        working-directory: zmk-workspace/config
+        run: |
+          set -euo pipefail
           west update --fetch-opt=--filter=tree:0
 
       - name: Install Zephyr Python requirements
-        working-directory: zmk-workspace
+        working-directory: zmk-workspace/config
         run: |
+          set -euo pipefail
           python3 -m pip install --user -r zephyr/scripts/requirements.txt
 
       - name: Build firmware
-        working-directory: zmk-workspace
+        working-directory: zmk-workspace/config
         run: |
-          west build -s zmk/app -d build/efogtech_trackball_0 -b efogtech_trackball_0 -- \
+          set -euo pipefail
+
+          west build \
+            -s zmk/app \
+            -d build/efogtech_trackball_0 \
+            -b efogtech_trackball_0 \
+            -- \
             -DZMK_CONFIG="${{ github.workspace }}/zmk-workspace/config/config" \
             -DZMK_EXTRA_MODULES="${{ github.workspace }}/zmk-workspace/config" \
             -DCONFIG_ZMK_STUDIO=y \
             -DSHIELD="studio-rpc-usb-uart zmk-usb-logging"
 
-      - name: Rename firmware
+      - name: Collect firmware
         run: |
+          set -euo pipefail
+
           mkdir -p firmware
-          cp zmk-workspace/build/efogtech_trackball_0/zephyr/*.uf2 "firmware/${{ needs.meta.outputs.release_version }}.uf2"
+          cp zmk-workspace/config/build/efogtech_trackball_0/zephyr/*.uf2 "firmware/${{ needs.meta.outputs.release_version }}.uf2"
+
+          echo "Firmware output:"
+          ls -la firmware
 
       - name: Upload firmware artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ needs.meta.outputs.archive_name }}
           path: firmware/*.uf2
+          if-no-files-found: error
 
   release:
     name: Create release
     runs-on: ubuntu-latest
     needs: [meta, build]
+
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
     permissions:
       contents: write
+
     steps:
       - name: Download firmware artifact
         uses: actions/download-artifact@v4

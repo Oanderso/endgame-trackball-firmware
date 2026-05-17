@@ -48,9 +48,6 @@ manifest:
     - name: zmk-bistable-behavior
       remote: efogdev
       revision: "68fa8d2"
-    - name: zmk-ble-shell
-      remote: efogdev
-      revision: "cfe4b88"
     - name: zmk-esb-endpoint
       remote: efogdev
       revision: "7327c25"

@@ -1,0 +1,97 @@
+name: Build HID Remapper for Waveshare RP2350-USB-CM
+
+on:
+  push:
+    branches:
+      - build/hid-remapper-rp2350-usb-cm
+    paths:
+      - '.github/workflows/build-hid-remapper-rp2350-usb-cm.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install ARM toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gcc-arm-none-eabi libnewlib-arm-none-eabi \
+            libstdc++-arm-none-eabi-newlib srecord
+
+      - name: Fetch pinned HID Remapper release
+        run: |
+          git clone --branch r2026-05-25 --depth 1 --recurse-submodules \
+            https://github.com/jfedor2/hid-remapper.git hid-remapper
+
+      - name: Add RP2350-USB-CM board definition and DMDP pin order
+        shell: python
+        run: |
+          from pathlib import Path
+
+          root = Path('hid-remapper/firmware')
+          boards = root / 'src' / 'boards'
+
+          usb_a = (boards / 'waveshare_rp2350_usb_a.h').read_text()
+          usb_cm = usb_a.replace('WAVESHARE_RP2350_USB_A', 'WAVESHARE_RP2350_USB_CM')
+          usb_cm = usb_cm.replace('_BOARDS_WAVESHARE_RP2350_USB_A_H', '_BOARDS_WAVESHARE_RP2350_USB_CM_H')
+          usb_cm = usb_cm.replace('#define PICO_DEFAULT_PIO_USB_DP_PIN 12', '#define PICO_DEFAULT_PIO_USB_DP_PIN 13')
+          (boards / 'waveshare_rp2350_usb_cm.h').write_text(usb_cm)
+
+          p = root / 'src' / 'remapper_single.cc'
+          s = p.read_text()
+          old = '''    pio_usb_configuration_t pio_cfg = PIO_USB_DEFAULT_CONFIG;\n    pio_cfg.pin_dp = PICO_DEFAULT_PIO_USB_DP_PIN;\n    pio_cfg.skip_alarm_pool = true;'''
+          new = '''    pio_usb_configuration_t pio_cfg = PIO_USB_DEFAULT_CONFIG;\n    pio_cfg.pin_dp = PICO_DEFAULT_PIO_USB_DP_PIN;\n#ifdef WAVESHARE_RP2350_USB_CM_BOARD\n    // Waveshare RP2350-USB-CM routes D+ to GPIO13 and D- to GPIO12.\n    // Pico-PIO-USB calls this reversed adjacent-pin layout DMDP.\n    pio_cfg.pinout = PIO_USB_PINOUT_DMDP;\n#endif\n    pio_cfg.skip_alarm_pool = true;'''
+          if old not in s:
+              raise SystemExit('Expected extra_init block not found; refusing to build unverified patch')
+          s = s.replace(old, new, 1)
+
+          old_mask = '''                                      (1 << PICO_DEFAULT_PIO_USB_DP_PIN) |\n                                      (1 << (PICO_DEFAULT_PIO_USB_DP_PIN + 1)));'''
+          new_mask = '''                                      (1 << PICO_DEFAULT_PIO_USB_DP_PIN) |\n#ifdef WAVESHARE_RP2350_USB_CM_BOARD\n                                      (1 << (PICO_DEFAULT_PIO_USB_DP_PIN - 1)));\n#else\n                                      (1 << (PICO_DEFAULT_PIO_USB_DP_PIN + 1)));\n#endif'''
+          if old_mask not in s:
+              raise SystemExit('Expected GPIO mask block not found; refusing to build unverified patch')
+          s = s.replace(old_mask, new_mask, 1)
+          p.write_text(s)
+
+      - name: Verify only expected source changes
+        run: |
+          cd hid-remapper
+          git status --short
+          grep -n "PICO_DEFAULT_PIO_USB_DP_PIN 13" firmware/src/boards/waveshare_rp2350_usb_cm.h
+          grep -n "PIO_USB_PINOUT_DMDP" firmware/src/remapper_single.cc
+
+      - name: Build dedicated UF2
+        run: |
+          cd hid-remapper/firmware
+          mkdir build-waveshare_rp2350_usb_cm
+          cd build-waveshare_rp2350_usb_cm
+          PICO_BOARD=waveshare_rp2350_usb_cm cmake ..
+          make -j2 remapper
+          cp remapper.uf2 ../../../remapper_waveshare_rp2350_usb_cm.uf2
+
+      - name: Create checksums and build notes
+        run: |
+          sha256sum remapper_waveshare_rp2350_usb_cm.uf2 > remapper_waveshare_rp2350_usb_cm.uf2.sha256
+          cat > BUILD-NOTES.txt <<'EOF'
+          HID Remapper base: jfedor2/hid-remapper r2026-05-25
+          Target hardware: Waveshare RP2350-USB-CM
+          Native USB-C receptacle: computer/device side
+          PIO USB-C male plug: mouse/host side
+
+          Board-specific changes:
+          - PIO USB D+ = GPIO13
+          - PIO USB D- = GPIO12
+          - PIO USB pin order = DMDP
+          - GPIO12 and GPIO13 reserved from user GPIO configuration
+          - No VBUS, CC, regulator, clock, flash-layout, or bootloader code altered
+          EOF
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hid-remapper-rp2350-usb-cm
+          path: |
+            remapper_waveshare_rp2350_usb_cm.uf2
+            remapper_waveshare_rp2350_usb_cm.uf2.sha256
+            BUILD-NOTES.txt
